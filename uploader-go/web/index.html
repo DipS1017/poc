@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resumable Upload</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/dexie@latest/dist/dexie.min.js"></script>
+    <style>
+        .drop-zone.dragover {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        .progress-bar {
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="max-w-4xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-900">Resumable Upload</h1>
+            <p class="text-gray-600 mt-2">Upload large files with pause, resume, and automatic recovery</p>
+        </header>
+
+        <!-- Drop Zone -->
+        <div id="dropZone" class="drop-zone border-2 border-dashed border-gray-300 rounded-xl p-12 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors mb-8">
+            <input type="file" id="fileInput" class="hidden" multiple>
+            <svg class="mx-auto h-16 w-16 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+            </svg>
+            <p class="text-lg font-medium text-gray-700">Drop files here or click to browse</p>
+            <p class="text-sm text-gray-500 mt-2">Supports any file type, no size limit</p>
+        </div>
+
+        <!-- Resume Prompts -->
+        <div id="resumePrompts" class="space-y-4 mb-8"></div>
+
+        <!-- Upload List -->
+        <div id="uploadList" class="space-y-4"></div>
+    </div>
+
+    <!-- Upload Item Template -->
+    <template id="uploadItemTemplate">
+        <div class="upload-item bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            <div class="flex items-start justify-between mb-3">
+                <div class="flex-1 min-w-0 mr-4">
+                    <h3 class="file-name text-sm font-medium text-gray-900 truncate"></h3>
+                    <p class="file-info text-xs text-gray-500 mt-1"></p>
+                </div>
+                <span class="status-badge inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"></span>
+            </div>
+            <div class="mb-3">
+                <div class="flex justify-between text-xs text-gray-600 mb-1">
+                    <span class="progress-text">0%</span>
+                    <span class="speed-text"></span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="progress-bar bg-blue-500 h-2 rounded-full" style="width: 0%"></div>
+                </div>
+            </div>
+            <div class="flex gap-2">
+                <button class="btn-pause hidden px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors">
+                    Pause
+                </button>
+                <button class="btn-resume hidden px-3 py-1.5 text-sm font-medium rounded-md bg-blue-500 text-white hover:bg-blue-600 transition-colors">
+                    Resume
+                </button>
+                <button class="btn-retry hidden px-3 py-1.5 text-sm font-medium rounded-md bg-orange-500 text-white hover:bg-orange-600 transition-colors">
+                    Retry
+                </button>
+                <button class="btn-cancel px-3 py-1.5 text-sm font-medium rounded-md border border-red-300 text-red-600 hover:bg-red-50 transition-colors">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </template>
+
+    <!-- Resume Prompt Template -->
+    <template id="resumePromptTemplate">
+        <div class="resume-prompt bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <div class="flex items-start">
+                <svg class="h-5 w-5 text-amber-500 mt-0.5 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                </svg>
+                <div class="flex-1">
+                    <h4 class="text-sm font-medium text-amber-800">Incomplete upload found</h4>
+                    <p class="file-info text-sm text-amber-700 mt-1"></p>
+                    <p class="progress-info text-xs text-amber-600 mt-1"></p>
+                    <div class="mt-3 flex gap-2">
+                        <label class="btn-select-file px-3 py-1.5 text-sm font-medium rounded-md bg-amber-500 text-white hover:bg-amber-600 transition-colors cursor-pointer">
+                            Select file to resume
+                            <input type="file" class="hidden resume-file-input">
+                        </label>
+                        <button class="btn-discard px-3 py-1.5 text-sm font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-100 transition-colors">
+                            Discard
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script>
+    // ============================================
+    // Database Setup
+    // ============================================
+    const db = new Dexie('UploaderDB');
+    db.version(1).stores({
+        uploads: 'id, uploadId, status',
+        parts: '[uploadId+partNumber], uploadId, status'
+    });
+
+    // ============================================
+    // Utility Functions
+    // ============================================
+    function formatBytes(bytes, decimals = 2) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i];
+    }
+
+    function formatSpeed(bytesPerSecond) {
+        if (bytesPerSecond === 0) return '';
+        return formatBytes(bytesPerSecond) + '/s';
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // ============================================
+    // UploadTask Class
+    // ============================================
+    class UploadTask extends EventTarget {
+        constructor(upload, file) {
+            super();
+            this.upload = upload;
+            this.file = file;
+            this.abortController = null;
+            this.activeUploads = 0;
+            this.maxConcurrent = 3;
+            this.isPaused = false;
+            this.bytesUploaded = 0;
+            this.lastBytesUploaded = 0;
+            this.lastSpeedUpdate = Date.now();
+            this.speed = 0;
+        }
+
+        async initiate() {
+            try {
+                const response = await fetch('/api/v1/initiate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        fileName: this.file.name,
+                        contentType: this.file.type || 'application/octet-stream',
+                        fileSize: this.file.size
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to initiate upload');
+                }
+
+                const data = await response.json();
+                this.upload.uploadId = data.uploadId;
+                this.upload.key = data.key;
+                this.upload.partSize = data.partSize;
+                this.upload.totalParts = data.totalParts;
+                this.upload.status = 'uploading';
+
+                await db.uploads.put(this.upload);
+
+                // Create part records
+                const parts = [];
+                for (let i = 1; i <= this.upload.totalParts; i++) {
+                    const startByte = (i - 1) * this.upload.partSize;
+                    const endByte = Math.min(i * this.upload.partSize, this.file.size);
+                    parts.push({
+                        uploadId: this.upload.uploadId,
+                        partNumber: i,
+                        status: 'pending',
+                        etag: '',
+                        size: endByte - startByte,
+                        startByte,
+                        endByte,
+                        retryCount: 0
+                    });
+                }
+                await db.parts.bulkPut(parts);
+
+                this.emitStatus('uploading');
+                return true;
+            } catch (error) {
+                this.upload.status = 'failed';
+                await db.uploads.put(this.upload);
+                this.emitStatus('failed');
+                this.emitError(error.message);
+                return false;
+            }
+        }
+
+        async start() {
+            if (!this.upload.uploadId) {
+                const success = await this.initiate();
+                if (!success) return;
+            }
+
+            this.isPaused = false;
+            this.abortController = new AbortController();
+
+            // Calculate initial bytes uploaded from completed parts
+            const completedParts = await db.parts
+                .where('uploadId').equals(this.upload.uploadId)
+                .and(p => p.status === 'completed')
+                .toArray();
+            this.bytesUploaded = completedParts.reduce((sum, p) => sum + p.size, 0);
+            this.emitProgress();
+
+            await this.uploadPendingParts();
+        }
+
+        async uploadPendingParts() {
+            while (!this.isPaused) {
+                const pendingParts = await db.parts
+                    .where('uploadId').equals(this.upload.uploadId)
+                    .and(p => p.status === 'pending')
+                    .toArray();
+
+                if (pendingParts.length === 0) {
+                    // Check if all parts are completed
+                    const incompleteParts = await db.parts
+                        .where('uploadId').equals(this.upload.uploadId)
+                        .and(p => p.status !== 'completed')
+                        .count();
+
+                    if (incompleteParts === 0) {
+                        await this.complete();
+                    }
+                    break;
+                }
+
+                // Upload parts with concurrency limit
+                const partsToUpload = pendingParts.slice(0, this.maxConcurrent - this.activeUploads);
+
+                await Promise.all(partsToUpload.map(part => this.uploadPart(part)));
+            }
+        }
+
+        async uploadPart(part) {
+            if (this.isPaused) return;
+
+            this.activeUploads++;
+            part.status = 'uploading';
+            await db.parts.put(part);
+
+            try {
+                // Get presigned URL
+                const signResponse = await fetch('/api/v1/sign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        uploadId: this.upload.uploadId,
+                        key: this.upload.key,
+                        partNumber: part.partNumber
+                    }),
+                    signal: this.abortController?.signal
+                });
+
+                if (!signResponse.ok) {
+                    throw new Error('Failed to get presigned URL');
+                }
+
+                const { url } = await signResponse.json();
+
+                // Upload the part
+                const blob = this.file.slice(part.startByte, part.endByte);
+                const uploadResponse = await fetch(url, {
+                    method: 'PUT',
+                    body: blob,
+                    signal: this.abortController?.signal
+                });
+
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed with status ${uploadResponse.status}`);
+                }
+
+                const etag = uploadResponse.headers.get('ETag') || '';
+                part.status = 'completed';
+                part.etag = etag.replace(/"/g, '');
+                await db.parts.put(part);
+
+                this.bytesUploaded += part.size;
+                this.emitProgress();
+
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    part.status = 'pending';
+                    await db.parts.put(part);
+                } else {
+                    part.retryCount++;
+                    if (part.retryCount < 3) {
+                        // Exponential backoff
+                        const delay = Math.pow(2, part.retryCount - 1) * 1000;
+                        await sleep(delay);
+                        part.status = 'pending';
+                        await db.parts.put(part);
+                    } else {
+                        part.status = 'failed';
+                        await db.parts.put(part);
+                        this.emitError(`Part ${part.partNumber} failed after 3 retries`);
+                    }
+                }
+            } finally {
+                this.activeUploads--;
+            }
+        }
+
+        pause() {
+            this.isPaused = true;
+            if (this.abortController) {
+                this.abortController.abort();
+                this.abortController = null;
+            }
+            this.upload.status = 'paused';
+            db.uploads.put(this.upload);
+            this.emitStatus('paused');
+        }
+
+        async cancel() {
+            this.isPaused = true;
+            if (this.abortController) {
+                this.abortController.abort();
+                this.abortController = null;
+            }
+
+            try {
+                if (this.upload.uploadId) {
+                    await fetch(`/api/v1/uploads/${this.upload.uploadId}`, {
+                        method: 'DELETE'
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to cancel upload on server:', error);
+            }
+
+            await db.parts.where('uploadId').equals(this.upload.uploadId).delete();
+            await db.uploads.delete(this.upload.id);
+
+            this.emitStatus('cancelled');
+        }
+
+        async syncWithServer() {
+            try {
+                const response = await fetch(`/api/v1/uploads/${this.upload.uploadId}/parts`);
+
+                if (response.status === 404) {
+                    // Upload session no longer exists
+                    this.upload.status = 'failed';
+                    await db.uploads.put(this.upload);
+                    this.emitStatus('failed');
+                    this.emitError('Upload session expired. Please start a new upload.');
+                    return false;
+                }
+
+                if (!response.ok) {
+                    throw new Error('Failed to sync with server');
+                }
+
+                const { parts: serverParts } = await response.json();
+                const serverPartsMap = new Map((serverParts || []).map(p => [p.partNumber, p]));
+
+                // Update local parts based on server state
+                const localParts = await db.parts
+                    .where('uploadId').equals(this.upload.uploadId)
+                    .toArray();
+
+                for (const part of localParts) {
+                    const serverPart = serverPartsMap.get(part.partNumber);
+                    if (serverPart && serverPart.etag) {
+                        part.status = 'completed';
+                        part.etag = serverPart.etag;
+                    } else if (part.status === 'uploading') {
+                        part.status = 'pending';
+                    }
+                    await db.parts.put(part);
+                }
+
+                return true;
+            } catch (error) {
+                this.emitError('Failed to sync with server: ' + error.message);
+                return false;
+            }
+        }
+
+        async complete() {
+            try {
+                const parts = await db.parts
+                    .where('uploadId').equals(this.upload.uploadId)
+                    .toArray();
+
+                const partData = parts
+                    .sort((a, b) => a.partNumber - b.partNumber)
+                    .map(p => ({
+                        partNumber: p.partNumber,
+                        etag: p.etag
+                    }));
+
+                const response = await fetch('/api/v1/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        uploadId: this.upload.uploadId,
+                        key: this.upload.key,
+                        parts: partData
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to complete upload');
+                }
+
+                this.upload.status = 'completed';
+                await db.uploads.put(this.upload);
+
+                // Clean up parts
+                await db.parts.where('uploadId').equals(this.upload.uploadId).delete();
+
+                this.emitStatus('completed');
+                this.dispatchEvent(new CustomEvent('complete', { detail: this.upload }));
+
+            } catch (error) {
+                this.upload.status = 'failed';
+                await db.uploads.put(this.upload);
+                this.emitStatus('failed');
+                this.emitError('Failed to complete upload: ' + error.message);
+            }
+        }
+
+        emitProgress() {
+            const now = Date.now();
+            const elapsed = (now - this.lastSpeedUpdate) / 1000;
+            if (elapsed >= 1) {
+                this.speed = (this.bytesUploaded - this.lastBytesUploaded) / elapsed;
+                this.lastBytesUploaded = this.bytesUploaded;
+                this.lastSpeedUpdate = now;
+            }
+
+            const progress = this.file.size > 0 ? (this.bytesUploaded / this.file.size) * 100 : 0;
+            this.dispatchEvent(new CustomEvent('progress', {
+                detail: {
+                    bytesUploaded: this.bytesUploaded,
+                    totalBytes: this.file.size,
+                    progress,
+                    speed: this.speed
+                }
+            }));
+        }
+
+        emitStatus(status) {
+            this.dispatchEvent(new CustomEvent('status', { detail: status }));
+        }
+
+        emitError(message) {
+            this.dispatchEvent(new CustomEvent('error', { detail: message }));
+        }
+    }
+
+    // ============================================
+    // UploadManager Class
+    // ============================================
+    class UploadManager {
+        constructor() {
+            this.tasks = new Map();
+        }
+
+        async init() {
+            // Load incomplete uploads from IndexedDB
+            const incompleteUploads = await db.uploads
+                .where('status').anyOf('pending', 'uploading', 'paused')
+                .toArray();
+
+            for (const upload of incompleteUploads) {
+                this.showResumePrompt(upload);
+            }
+        }
+
+        async upload(file) {
+            const upload = {
+                id: crypto.randomUUID(),
+                uploadId: '',
+                key: '',
+                fileName: file.name,
+                fileSize: file.size,
+                fileLastModified: file.lastModified,
+                partSize: 5242880,
+                totalParts: 0,
+                status: 'pending',
+                createdAt: Date.now()
+            };
+
+            await db.uploads.put(upload);
+
+            const task = new UploadTask(upload, file);
+            this.tasks.set(upload.id, task);
+
+            this.createUploadUI(upload, task);
+            task.start();
+
+            return task;
+        }
+
+        async resume(upload, file) {
+            // Verify file matches
+            if (file.name !== upload.fileName ||
+                file.size !== upload.fileSize ||
+                file.lastModified !== upload.fileLastModified) {
+                alert('The selected file does not match the original upload. Please select the correct file.');
+                return null;
+            }
+
+            const task = new UploadTask(upload, file);
+            this.tasks.set(upload.id, task);
+
+            // Sync with server first
+            const synced = await task.syncWithServer();
+            if (!synced) {
+                return null;
+            }
+
+            upload.status = 'uploading';
+            await db.uploads.put(upload);
+
+            this.createUploadUI(upload, task);
+            task.start();
+
+            return task;
+        }
+
+        showResumePrompt(upload) {
+            const template = document.getElementById('resumePromptTemplate');
+            const clone = template.content.cloneNode(true);
+            const element = clone.querySelector('.resume-prompt');
+            element.dataset.uploadId = upload.id;
+
+            element.querySelector('.file-info').textContent =
+                `${upload.fileName} (${formatBytes(upload.fileSize)})`;
+
+            // Calculate progress
+            db.parts.where('uploadId').equals(upload.uploadId)
+                .and(p => p.status === 'completed')
+                .toArray()
+                .then(completedParts => {
+                    const completedBytes = completedParts.reduce((sum, p) => sum + p.size, 0);
+                    const progress = upload.fileSize > 0 ? (completedBytes / upload.fileSize) * 100 : 0;
+                    element.querySelector('.progress-info').textContent =
+                        `${progress.toFixed(1)}% complete (${formatBytes(completedBytes)} of ${formatBytes(upload.fileSize)})`;
+                });
+
+            const fileInput = element.querySelector('.resume-file-input');
+            fileInput.addEventListener('change', async (e) => {
+                if (e.target.files.length > 0) {
+                    element.remove();
+                    await this.resume(upload, e.target.files[0]);
+                }
+            });
+
+            element.querySelector('.btn-discard').addEventListener('click', async () => {
+                if (confirm('Are you sure you want to discard this upload?')) {
+                    if (upload.uploadId) {
+                        try {
+                            await fetch(`/api/v1/uploads/${upload.uploadId}`, { method: 'DELETE' });
+                        } catch (error) {
+                            console.error('Failed to delete upload on server:', error);
+                        }
+                    }
+                    await db.parts.where('uploadId').equals(upload.uploadId).delete();
+                    await db.uploads.delete(upload.id);
+                    element.remove();
+                }
+            });
+
+            document.getElementById('resumePrompts').appendChild(element);
+        }
+
+        createUploadUI(upload, task) {
+            const template = document.getElementById('uploadItemTemplate');
+            const clone = template.content.cloneNode(true);
+            const element = clone.querySelector('.upload-item');
+            element.dataset.uploadId = upload.id;
+
+            element.querySelector('.file-name').textContent = upload.fileName;
+            element.querySelector('.file-info').textContent = formatBytes(upload.fileSize);
+
+            const progressBar = element.querySelector('.progress-bar');
+            const progressText = element.querySelector('.progress-text');
+            const speedText = element.querySelector('.speed-text');
+            const statusBadge = element.querySelector('.status-badge');
+            const btnPause = element.querySelector('.btn-pause');
+            const btnResume = element.querySelector('.btn-resume');
+            const btnRetry = element.querySelector('.btn-retry');
+            const btnCancel = element.querySelector('.btn-cancel');
+
+            const updateStatus = (status) => {
+                statusBadge.className = 'status-badge inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium';
+                btnPause.classList.add('hidden');
+                btnResume.classList.add('hidden');
+                btnRetry.classList.add('hidden');
+
+                switch (status) {
+                    case 'pending':
+                        statusBadge.classList.add('bg-gray-100', 'text-gray-700');
+                        statusBadge.textContent = 'Pending';
+                        break;
+                    case 'uploading':
+                        statusBadge.classList.add('bg-blue-100', 'text-blue-700');
+                        statusBadge.textContent = 'Uploading';
+                        btnPause.classList.remove('hidden');
+                        break;
+                    case 'paused':
+                        statusBadge.classList.add('bg-yellow-100', 'text-yellow-700');
+                        statusBadge.textContent = 'Paused';
+                        btnResume.classList.remove('hidden');
+                        break;
+                    case 'completed':
+                        statusBadge.classList.add('bg-green-100', 'text-green-700');
+                        statusBadge.textContent = 'Completed';
+                        btnCancel.classList.add('hidden');
+                        progressBar.classList.remove('bg-blue-500');
+                        progressBar.classList.add('bg-green-500');
+                        break;
+                    case 'failed':
+                        statusBadge.classList.add('bg-red-100', 'text-red-700');
+                        statusBadge.textContent = 'Failed';
+                        btnRetry.classList.remove('hidden');
+                        progressBar.classList.remove('bg-blue-500');
+                        progressBar.classList.add('bg-red-500');
+                        break;
+                    case 'cancelled':
+                        element.remove();
+                        return;
+                }
+            };
+
+            task.addEventListener('progress', (e) => {
+                const { progress, speed } = e.detail;
+                progressBar.style.width = `${progress}%`;
+                progressText.textContent = `${progress.toFixed(1)}%`;
+                speedText.textContent = formatSpeed(speed);
+            });
+
+            task.addEventListener('status', (e) => {
+                updateStatus(e.detail);
+            });
+
+            task.addEventListener('error', (e) => {
+                console.error('Upload error:', e.detail);
+            });
+
+            btnPause.addEventListener('click', () => {
+                task.pause();
+            });
+
+            btnResume.addEventListener('click', () => {
+                task.start();
+                updateStatus('uploading');
+            });
+
+            btnRetry.addEventListener('click', async () => {
+                // Reset failed parts
+                const failedParts = await db.parts
+                    .where('uploadId').equals(upload.uploadId)
+                    .and(p => p.status === 'failed')
+                    .toArray();
+
+                for (const part of failedParts) {
+                    part.status = 'pending';
+                    part.retryCount = 0;
+                    await db.parts.put(part);
+                }
+
+                upload.status = 'uploading';
+                await db.uploads.put(upload);
+
+                progressBar.classList.remove('bg-red-500');
+                progressBar.classList.add('bg-blue-500');
+                task.start();
+                updateStatus('uploading');
+            });
+
+            btnCancel.addEventListener('click', async () => {
+                if (confirm('Are you sure you want to cancel this upload?')) {
+                    await task.cancel();
+                }
+            });
+
+            updateStatus(upload.status);
+            document.getElementById('uploadList').prepend(element);
+        }
+    }
+
+    // ============================================
+    // Application Initialization
+    // ============================================
+    const uploadManager = new UploadManager();
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        await uploadManager.init();
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+
+        // Click to select files
+        dropZone.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+            fileInput.value = '';
+        });
+
+        // Drag and drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        function handleFiles(files) {
+            for (const file of files) {
+                uploadManager.upload(file);
+            }
+        }
+    });
+    </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+services:
+  openobserve:
+    image: openobserve/openobserve:latest
+    container_name: openobserve
+    ports:
+      - "5080:5080"   # OpenObserve UI
+      - "4317:5081"   # OTLP gRPC (traces & metrics)
+      - "4318:4318"   # OTLP HTTP (optional)
+    environment:
+      ZO_ROOT_USER_EMAIL: admin@example.com
+      ZO_ROOT_USER_PASSWORD: admin
+      ZO_OLTP_ENABLED: "true"
+      ZO_DEV_MODE: "true"  # enables development mode with in-memory storage
+    #restart: unless-stopped

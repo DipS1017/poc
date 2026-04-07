@@ -1,0 +1,21 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/go-zitadel ."
+  bin = "./tmp/go-zitadel"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "vendor", "node_modules", "web"]
+  delay = 500
+
+[log]
+  time = true
+
+[color]
+  main = "yellow"
+  watcher = "cyan"
+  build = "green"
+  runner = "magenta"
+
+[misc]
+  clean_on_exit = true
