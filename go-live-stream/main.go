@@ -3,7 +3,10 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
+	"strings"
 
+	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"go-live-stream/internal/handlers"
@@ -12,13 +15,27 @@ import (
 )
 
 func main() {
+	// Load .env if present (ignored in production if file doesn't exist)
+	_ = godotenv.Load()
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	corsOrigins := os.Getenv("CORS_ORIGINS")
+	if corsOrigins == "" {
+		corsOrigins = "*"
+	}
+	allowedOrigins := strings.Split(corsOrigins, ",")
+
 	e := echo.New()
 	e.HideBanner = true
 
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+		AllowOrigins: allowedOrigins,
 		AllowHeaders: []string{"*"},
 		AllowMethods: []string{
 			http.MethodGet, http.MethodPost,
@@ -65,5 +82,5 @@ func main() {
 	e.GET("/", func(c echo.Context) error { return c.File("frontend/dist/index.html") })
 	e.GET("/*", func(c echo.Context) error { return c.File("frontend/dist/index.html") })
 
-	e.Logger.Fatal(e.Start(":8080"))
+	e.Logger.Fatal(e.Start(":" + port))
 }

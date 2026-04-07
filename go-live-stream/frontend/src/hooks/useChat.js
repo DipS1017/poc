@@ -1,7 +1,9 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 
 const WS_BASE = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-const WS_HOST = import.meta.env.DEV ? 'ws://localhost:8080' : `${WS_BASE}//${window.location.host}`
+const WS_HOST = import.meta.env.DEV
+  ? (import.meta.env.VITE_BACKEND_URL?.replace(/^http/, 'ws') || 'ws://localhost:8080')
+  : `${WS_BASE}//${window.location.host}`
 
 export function useChat(roomID, username) {
   const wsRef = useRef(null)
