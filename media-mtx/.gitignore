@@ -1,0 +1,11 @@
+# compiled Go binary (build output, named after the module dir)
+/media-mtx
+mtx-app
+
+# local tooling / runtime state
+.omc/
+.claude/
+tmp/
+
+# HLS scratch output (if ever written locally)
+hls_out/
