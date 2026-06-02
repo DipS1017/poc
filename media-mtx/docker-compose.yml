@@ -1,0 +1,64 @@
+services:
+  mediamtx:
+    # -ffmpeg variant bundles ffmpeg so runOnReady can package HLS
+    image: bluenviron/mediamtx:latest-ffmpeg
+    container_name: mediamtx
+    restart: unless-stopped
+    ports:
+      - "1935:1935"     # RTMP ingest   (OBS / ffmpeg publish here)
+      - "8889:8889"     # WebRTC/WHIP    (browser publishes webcam here)
+      - "8189:8189/udp" # WebRTC ICE     (media transport)
+      - "8888:8888"     # HLS playback   (live, from MediaMTX memory)
+      - "9997:9997"     # Control API
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      - hls-out:/hls_out          # ffmpeg writes HLS segments here
+
+  app:
+    build: .
+    container_name: media-mtx-app
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    environment:
+      MEDIAMTX_API: http://mediamtx:9997
+      HLS_BASE: http://localhost:8888
+      # Reuse the existing shared-minio (reachable on the external "shared" network)
+      MINIO_ENDPOINT: shared-minio:9000
+      # Host the browser can reach — presigned URLs are signed against this
+      MINIO_PUBLIC_ENDPOINT: localhost:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: hls
+      HLS_OUT_DIR: /hls_out
+    volumes:
+      - hls-out:/hls_out          # app reads segments here, uploads to S3
+    ports:
+      - "8080:8080"
+    networks:
+      - default
+      - shared
+
+  # One-shot: create our own "hls" bucket in the existing shared-minio.
+  # Does NOT touch the existing profiles/ or wepreach/ buckets.
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      - app
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set s http://shared-minio:9000 minioadmin minioadmin; do sleep 1; done;
+      mc mb -p s/hls;
+      mc anonymous set none s/hls;
+      echo 'bucket hls ready (private — access via presigned URLs)';
+      "
+    networks:
+      - shared
+
+networks:
+  default:
+  shared:
+    external: true
+
+volumes:
+  hls-out:

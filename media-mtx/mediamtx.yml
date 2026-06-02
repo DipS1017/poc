@@ -1,0 +1,62 @@
+# MediaMTX configuration — RTMP ingest -> HLS playback POC
+# Full reference: https://github.com/bluenviron/mediamtx/blob/main/mediamtx.yml
+
+logLevel: info
+
+# Control API (used by the Go service to list active streams)
+api: yes
+apiAddress: :9997
+
+# Allow any client to publish, read, and call the API (POC only — lock down for prod)
+authInternalUsers:
+  - user: any
+    pass:
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+      - action: pprof
+
+# --- Ingest: publishers (OBS / ffmpeg) push here ---
+rtmp: yes
+rtmpAddress: :1935
+
+# --- Browser ingest: WebRTC/WHIP (publish webcam from a browser) ---
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigin: '*'
+webrtcLocalUDPAddress: :8189
+webrtcIPsFromInterfaces: yes
+
+# --- Playback: browsers pull HLS here ---
+hls: yes
+hlsAddress: :8888
+hlsAllowOrigin: '*'
+hlsVariant: lowLatency
+
+# RTSP is enabled so the internal ffmpeg packager can pull the stream locally
+rtsp: yes
+rtspAddress: :8554
+srt: no
+
+# Paths — accept any stream name on publish (e.g. rtmp://host/live/mystream)
+paths:
+  all_others:
+    # When a stream becomes ready, REPACKAGE it to HLS (format change only) and
+    # write segments to /hls_out/<path>/. The Go app's S3 sync loop then uploads
+    # those files to MinIO.
+    #   -c:v copy  -> video is NOT re-encoded, just remuxed into HLS chunks
+    #   -c:a aac   -> audio re-encoded only because HLS needs AAC (input may be Opus)
+    # Clear any previous recording for this path, then start fresh at seg00000.
+    # (No append_list: each publish is its own clean recording, not appended to
+    # whatever leftover segments are on the persistent volume.)
+    runOnReady: >
+      sh -c 'rm -rf /hls_out/$MTX_PATH && mkdir -p /hls_out/$MTX_PATH &&
+      ffmpeg -nostdin -loglevel warning -rtsp_transport tcp -i rtsp://localhost:8554/$MTX_PATH
+      -c:v copy -c:a aac
+      -f hls -hls_time 2 -hls_list_size 0
+      -hls_segment_filename /hls_out/$MTX_PATH/seg%05d.ts
+      /hls_out/$MTX_PATH/index.m3u8'
+    runOnReadyRestart: no
