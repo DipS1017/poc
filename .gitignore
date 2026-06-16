@@ -1,0 +1,107 @@
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+
+# ---------- Editors / IDE ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*.iml
+.cursor/
+.zed/
+.history/
+
+# ---------- Env / secrets ----------
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.crt
+*.p12
+login-client.pat
+secrets/
+
+# ---------- Logs ----------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- Node / JS ----------
+node_modules/
+dist/
+build/
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+.parcel-cache/
+.vite/
+coverage/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+
+# ---------- Go ----------
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+go.work
+go.work.sum
+
+# Compiled binaries named after their module dir (poc convention)
+/go-live-stream/go-live-stream
+/go-zitadel/go-zitadel
+/media-mtx/media-mtx
+/media-mtx/mtx-app
+/uploader-go/server
+/otel-openobserve/tmp/
+
+# ---------- Tooling / runtime state ----------
+tmp/
+.tmp/
+.cache/
+.air/
+air.log
+
+# ---------- OMC / Claude ----------
+.omc/
+.claude/
+!.claude/settings.json
+
+# ---------- Kubernetes / Docker ----------
+*.kubeconfig
+kubeconfig
+.opencode/
+
+# ---------- HLS / media scratch ----------
+hls_out/
+*.ts
+!*.test.ts
+!*.spec.ts
+*.m3u8
+*.mp4
+*.webm
+*.mkv
+recordings/
+
+# ---------- Python (just in case) ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
